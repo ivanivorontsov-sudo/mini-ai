@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main" android:fitsSystemWindows="true"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:padding="4dp">
+        <Button android:id="@+id/btn_pick" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:text="Файл модели" style="@style/Widget.Material3.Button.TonalButton"/>
+        <Button android:id="@+id/btn_download" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:layout_marginStart="4dp" android:text="Скачать" style="@style/Widget.Material3.Button.TonalButton"/>
+        <Button android:id="@+id/btn_clear" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="wrap_content" android:layout_marginStart="4dp" android:text="Очистить" style="@style/Widget.Material3.Button.TonalButton"/>
+    </LinearLayout>
+    <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/honest"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingHorizontal="12dp" android:text="Честный режим (меньше выдумок и поддакивания)"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingHorizontal="12dp" android:gravity="center_vertical">
+        <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/search"
+            android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+            android:text="Поиск в интернете"/>
+        <Button android:id="@+id/btn_engine" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="Google" style="@style/Widget.Material3.Button.TextButton"/>
+    </LinearLayout>
+    <TextView android:id="@+id/gguf" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingHorizontal="12dp" android:paddingBottom="4dp"
+        android:text="Модель не загружена. Выберите файл .gguf или скачайте модель."
+        style="@style/TextAppearance.MaterialComponents.Body2"/>
+    <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingHorizontal="12dp" android:max="1000" android:visibility="gone"/>
+    <androidx.recyclerview.widget.RecyclerView android:id="@+id/messages"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+        android:scrollbars="vertical"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingStart="12dp">
+        <EditText android:id="@+id/user_input" android:enabled="false" android:layout_width="0dp"
+            android:layout_weight="1" android:layout_height="wrap_content" android:padding="8dp"
+            android:maxLines="5" android:hint="Сначала загрузите модель"/>
+        <com.google.android.material.floatingactionbutton.FloatingActionButton android:id="@+id/fab"
+            android:enabled="false" android:contentDescription="Отправить"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_margin="8dp" android:src="@drawable/outline_send_24"/>
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,1 @@
+JSON.stringify([].slice.call(document.querySelectorAll('a')).filter(a=>a.innerText.trim().length>20).slice(0,12).map(a=>[a.innerText.slice(0,60),(a.getAttribute('href')||'').slice(0,70),a.getAttribute('data-ved')?1:0]))
