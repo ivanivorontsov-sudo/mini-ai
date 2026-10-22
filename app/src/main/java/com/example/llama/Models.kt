@@ -4,7 +4,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 
 data class ModelInfo(
     val id: String, val title: String, val url: String, val fileName: String,
-    val size: Long, val sha256: String, val ramGb: Int, val note: String
+    val size: Long, val sha256: String, val ramGb: Int, val note: String,
+    /** send the user's GitHub token (private repo asset); the token never ships in the APK */
+    val githubAuth: Boolean = false,
+    /** release tag of a dynamically resolved model (Ivan GPT) */
+    val version: String = "",
+    /** asset is a .zip that contains the .gguf */
+    val zipped: Boolean = false
 )
 
 object Models {
@@ -30,7 +36,9 @@ object Models {
             "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db", 2,
             "Очень быстрая, но слабая. Для проверки. Apache 2.0."),
     )
-    fun byId(id: String?) = list.firstOrNull { it.id == id }
+    /** Entries resolved at runtime (Ivan GPT latest release, own model by URL). */
+    val dynamic = java.util.concurrent.ConcurrentHashMap<String, ModelInfo>()
+    fun byId(id: String?) = dynamic[id] ?: list.firstOrNull { it.id == id }
 }
 
 sealed class DlState {

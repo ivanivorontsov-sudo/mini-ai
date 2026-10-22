@@ -574,3 +574,17 @@ JNIEXPORT void JNICALL
 Java_com_arm_aichat_internal_InferenceEngineImpl_shutdown(JNIEnv *, jobject /*unused*/) {
     llama_backend_free();
 }
+
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_resetContext(JNIEnv *, jobject /*unused*/) {
+    reset_long_term_states();
+    reset_short_term_states();
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_arm_aichat_internal_InferenceEngineImpl_hasChatTemplate(JNIEnv *, jobject /*unused*/) {
+    return g_chat_templates && common_chat_templates_was_explicit(g_chat_templates.get()) ? JNI_TRUE : JNI_FALSE;
+}

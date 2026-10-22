@@ -6,3 +6,4 @@
 }
 
 -keep class kotlin.Metadata { *; }
+-keep class com.arm.aichat.internal.** { *; }

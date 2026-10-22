@@ -27,3 +27,7 @@
     public static int v(...);
     public static int d(...);
 }
+-keep class com.arm.aichat.internal.** { *; }
+-dontwarn javax.annotation.Nullable
+-dontwarn javax.annotation.concurrent.GuardedBy
+-dontwarn javax.annotation.**

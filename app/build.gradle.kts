@@ -15,8 +15,8 @@ android {
         minSdk = 30
         targetSdk = 36
 
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -66,6 +66,7 @@ android {
 dependencies {
     implementation(libs.bundles.androidx)
     implementation(libs.material)
+    implementation("androidx.security:security-crypto:1.1.0")
 
     implementation(project(":lib"))
 
@@ -73,3 +74,15 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }
+
+// Release gate: every Kotlin `external fun` must have its Java_* symbol in libai-chat.so for every ABI.
+val verifyJni = tasks.register<Exec>("verifyJniRelease") {
+    val ndkNm = android.ndkDirectory.resolve("toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm")
+    val apkDir = layout.buildDirectory.dir("outputs/apk/release")
+    doFirst {
+        val apk = apkDir.get().asFile.listFiles { f -> f.extension == "apk" }!!.first()
+        commandLine("python3", rootProject.file("scripts/check_jni.py").path, apk.path, ndkNm.path,
+            rootProject.file("lib/src/main/java").path)
+    }
+}
+afterEvaluate { tasks.named("assembleRelease") { finalizedBy(verifyJni) } }

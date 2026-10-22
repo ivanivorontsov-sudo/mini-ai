@@ -20,6 +20,7 @@ import com.arm.aichat.InferenceEngine
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.transformWhile
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -41,6 +42,9 @@ class MainActivity : AppCompatActivity() {
     private var generationJob: Job? = null
     private var currentModel: File? = null
     private var isModelReady = false
+    /** false = model without chat template (Ivan GPT): «Человек:/ИИ:» format, KV reset per turn */
+    private var chatMode = true
+    private val plainHistory = mutableListOf<String>()
     private val messages = mutableListOf<Message>()
     private val lastAssistant = StringBuilder()
     private val adapter = MessageAdapter(messages)
@@ -98,18 +102,93 @@ class MainActivity : AppCompatActivity() {
     private fun showModels() {
         val ram = totalRamGb()
         val dir = DownloadService.modelsDir(this)
-        val items = Models.list.map { m ->
+        val ivanFile = File(dir, "ivan-gpt.gguf")
+        val ivanItem = "${IvanGpt.TITLE}" + (if (ivanFile.exists()) " ✅ ${IvanGpt.installedVersion(this) ?: "скачана"}" else "") + "\n${IvanGpt.NOTE}"
+        val catalog = Models.list.map { m ->
             val have = File(dir, m.fileName).exists()
             val part = File(dir, m.fileName + ".part")
             val st = when { have -> " ✅ скачана"; part.exists() -> " ⏸ скачано ${part.length() * 100 / m.size}%"; else -> "" }
             val warn = if (ram < m.ramGb - 0.5) " ⚠ мало памяти" else ""
             "${m.title}$st\n${"%.1f".format(m.size / 1e9)} ГБ · нужно ОЗУ от ${m.ramGb} ГБ$warn\n${m.note}"
-        }.toTypedArray()
+        }
+        val tokenItem = "🔑 GitHub-токен для Ivan GPT: " + (if (SecureStore.githubToken(this) != null) "сохранён" else "не задан")
+        val items = (listOf(ivanItem) + catalog + listOf("🔗 Своя модель по ссылке (.gguf)", tokenItem)).toTypedArray()
         AlertDialog.Builder(this)
             .setTitle("Выберите модель (у вас ОЗУ ≈ ${"%.1f".format(ram)} ГБ)")
-            .setItems(items) { _, i -> if (!maybePause(Models.list[i])) modelAction(Models.list[i]) }
+            .setItems(items) { _, i ->
+                when {
+                    i == 0 -> ivanAction()
+                    i <= Models.list.size -> Models.list[i - 1].let { if (!maybePause(it)) modelAction(it) }
+                    i == Models.list.size + 1 -> askUrl()
+                    else -> askToken()
+                }
+            }
             .setNeutralButton("Файл с телефона") { _, _ -> pickFile.launch(arrayOf("*/*")) }
             .setNegativeButton("Закрыть", null).show()
+    }
+
+    private fun askToken(then: (() -> Unit)? = null) {
+        val et = EditText(this).apply {
+            hint = "ghp_… или github_pat_…"; inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        AlertDialog.Builder(this).setTitle("GitHub-токен")
+            .setMessage("Репозиторий Ivan GPT приватный. Создайте на github.com → Settings → Developer settings токен с правом чтения (Contents: Read) для репозитория ivan-gpt. Токен хранится только на этом телефоне в зашифрованном виде.")
+            .setView(et)
+            .setPositiveButton("Сохранить") { _, _ -> SecureStore.setGithubToken(this, et.text.toString()); toast("Токен сохранён"); then?.invoke() }
+            .setNeutralButton("Удалить токен") { _, _ -> SecureStore.setGithubToken(this, null); toast("Токен удалён") }
+            .setNegativeButton("Отмена", null).show()
+    }
+
+    private fun askUrl() {
+        val et = EditText(this).apply { hint = "https://…/model.gguf"; inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI }
+        AlertDialog.Builder(this).setTitle("Своя модель по ссылке")
+            .setMessage("Прямая ссылка на файл .gguf (например, Hugging Face → resolve/main/…). Контрольная сумма не проверяется, проверяется только формат GGUF.")
+            .setView(et)
+            .setPositiveButton("Скачать") { _, _ ->
+                val url = et.text.toString().trim()
+                if (!url.startsWith("https://")) { toast("Нужна ссылка https://"); return@setPositiveButton }
+                val name = url.substringBefore('?').substringAfterLast('/').ifBlank { "custom" }.let { if (it.endsWith(".gguf")) it else "$it.gguf" }
+                val m = ModelInfo("custom_" + name.hashCode(), name, url, name, 0L, "", 1, "Своя модель")
+                Models.dynamic[m.id] = m
+                DownloadService.start(this, m)
+            }.setNegativeButton("Отмена", null).show()
+    }
+
+    /** Ivan GPT: always the latest release; offers an update when a newer tag exists. */
+    private fun ivanAction() {
+        val f = File(DownloadService.modelsDir(this), "ivan-gpt.gguf")
+        if (SecureStore.githubToken(this) == null && !f.exists()) { askToken { ivanAction() }; return }
+        statusTv.text = "Ivan GPT: проверяю последний релиз…"
+        lifecycleScope.launch {
+            val res = withContext(Dispatchers.IO) { runCatching { IvanGpt.resolveLatest(this@MainActivity) } }
+            val m = res.getOrNull()
+            val have = IvanGpt.installedVersion(this@MainActivity)
+            if (f.exists()) {
+                val upd = m != null && m.version != have
+                val msg = "Установлена: ${have ?: "файл с телефона"}\n" + when {
+                    m == null -> "Проверить обновление не удалось: ${res.exceptionOrNull()?.message}"
+                    upd -> "Вышла новая версия: ${m.version}"
+                    else -> "Это последняя версия."
+                }
+                statusTv.text = "Ivan GPT ${have ?: ""}"
+                AlertDialog.Builder(this@MainActivity).setTitle(IvanGpt.TITLE).setMessage(msg)
+                    .setPositiveButton(if (upd) "Обновить" else "Использовать") { _, _ ->
+                        if (upd) { Models.dynamic[m!!.id] = m; if (currentModel == f) unload(); f.delete(); DownloadService.start(this@MainActivity, m) } else loadModel(f)
+                    }
+                    .setNegativeButton("Удалить") { _, _ -> if (currentModel == f) unload(); f.delete(); toast("Модель удалена") }
+                    .setNeutralButton(if (upd) "Позже" else "Отмена") { _, _ -> if (upd) loadModel(f) }.show()
+                return@launch
+            }
+            if (m == null) {
+                val e = res.exceptionOrNull()
+                statusTv.text = "Ivan GPT: ${e?.message}"
+                if (e is IvanGpt.NeedToken) askToken { ivanAction() }
+                return@launch
+            }
+            statusTv.text = "Ivan GPT ${m.version}: скачиваю ${m.size / 1_000_000} МБ…"
+            Models.dynamic[m.id] = m
+            DownloadService.start(this@MainActivity, m)
+        }
     }
 
     private fun modelAction(m: ModelInfo) {
@@ -139,8 +218,8 @@ class MainActivity : AppCompatActivity() {
             is DlState.Idle -> progress.visibility = View.GONE
             is DlState.Running -> {
                 progress.visibility = View.VISIBLE; progress.isIndeterminate = false
-                progress.progress = (s.done * 1000 / s.total).toInt()
-                statusTv.text = "Скачивание ${s.model.title}: ${s.done * 100 / s.total}% (${s.done / 1_000_000} из ${s.total / 1_000_000} МБ). Нажмите «Скачать» → модель, чтобы поставить на паузу."
+                val tot = maxOf(s.total, 1L); progress.isIndeterminate = s.total <= 0; progress.progress = (s.done * 1000 / tot).toInt()
+                statusTv.text = "Скачивание ${s.model.title}: ${if (s.total > 0) "${s.done * 100 / s.total}%" else ""} (${s.done / 1_000_000} из ${s.total / 1_000_000} МБ). Нажмите «Скачать» → модель, чтобы поставить на паузу."
             }
             is DlState.Verifying -> { progress.isIndeterminate = true; statusTv.text = "Проверка SHA256…" }
             is DlState.Paused -> { progress.visibility = View.GONE; statusTv.text = "Пауза: ${s.model.title}, скачано ${s.done / 1_000_000} МБ. Нажмите «Скачать», чтобы продолжить." }
@@ -194,13 +273,17 @@ class MainActivity : AppCompatActivity() {
                 if (isModelReady) engine.cleanUp()
                 isModelReady = false
                 val honest = prefs.getBoolean("honest", true)
-                if (honest) engine.setSamplingParams(0.3f, 0.9f, 1.1f) else engine.setSamplingParams(0.7f, 0.95f, 1.0f)
+                if (f.name.startsWith("ivan-gpt")) engine.setSamplingParams(0.7f, 0.9f, 1.15f) // as in ivan-gpt/chat_eval_lib.py
+                else if (honest) engine.setSamplingParams(0.3f, 0.9f, 1.1f) else engine.setSamplingParams(0.7f, 0.95f, 1.0f)
                 engine.loadModel(f.path)
-                engine.setSystemPrompt(if (honest) HONEST_PROMPT else SYSTEM_PROMPT)
+                chatMode = engine.isChatModel()
+                if (chatMode) engine.setSystemPrompt(if (honest) HONEST_PROMPT else SYSTEM_PROMPT)
+                plainHistory.clear()
                 isModelReady = true; currentModel = f
                 prefs.edit().putString("model", f.path).apply()
                 withContext(Dispatchers.Main) {
-                    statusTv.text = "Модель: ${f.name}"; input.hint = "Напишите сообщение"; setInput(true)
+                    statusTv.text = "Модель: ${f.name}" + (if (f.name.startsWith("ivan-gpt")) " ${IvanGpt.installedVersion(this@MainActivity) ?: ""}" else "") +
+                        (if (!chatMode) " · без чат-шаблона (формат «Человек/ИИ», поиск не используется)" else ""); input.hint = "Напишите сообщение"; setInput(true)
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "load", e)
@@ -259,6 +342,7 @@ class MainActivity : AppCompatActivity() {
         lastAssistant.clear()
         messages.add(Message(UUID.randomUUID().toString(), "…", false))
         adapter.notifyItemRangeInserted(messages.size - 2, 2); messagesRv.scrollToPosition(messages.size - 1)
+        if (!chatMode) { sendPlain(msg); return }
         generationJob = lifecycleScope.launch {
             var prompt = msg
             var hits: List<SearchHit>? = null
@@ -287,6 +371,33 @@ class MainActivity : AppCompatActivity() {
                     lastAssistant.append("\n\nИсточники:\n" + h.mapIndexed { i, r -> "[${i + 1}] ${r.title}\n${r.url}" }.joinToString("\n"))
                     setAssistant(lastAssistant.toString())
                 }
+            } catch (e: CancellationException) { throw e } catch (e: Throwable) {
+                toast("Ошибка: ${e.message}")
+            } finally { setInput(true) }
+        }
+    }
+
+    /** Ivan GPT style: exactly the format from ivan-gpt/prep_chat.py; stop at EOS or newline. */
+    private fun sendPlain(msg: String) {
+        generationJob = lifecycleScope.launch {
+            if (IvanGpt.blocked(msg)) { setAssistant(IvanGpt.REFUSAL); setInput(true); return@launch }
+            plainHistory.add("Человек: " + msg.replace('\n', ' '))
+            val prompt = IvanGpt.buildPrompt(plainHistory)
+            val out = StringBuilder()
+            try {
+                withContext(Dispatchers.Default) {
+                    engine.resetConversation()
+                    engine.sendUserPrompt(prompt, 80).transformWhile { t ->
+                        out.append(t); val stop = out.contains('\n'); emit(Unit); !stop
+                    }.collect {
+                        withContext(Dispatchers.Main) { setAssistant(out.toString().substringBefore('\n').trim().ifEmpty { "…" }) }
+                    }
+                }
+                var reply = out.toString().substringBefore('\n').trim()
+                if (IvanGpt.blocked(reply)) reply = IvanGpt.REFUSAL
+                if (reply.isEmpty()) reply = "…"
+                setAssistant(reply)
+                plainHistory.add("ИИ: $reply")
             } catch (e: CancellationException) { throw e } catch (e: Throwable) {
                 toast("Ошибка: ${e.message}")
             } finally { setInput(true) }

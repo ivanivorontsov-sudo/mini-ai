@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
@@ -83,7 +84,28 @@ internal class InferenceEngineImpl private constructor(
     private external fun init(nativeLibDir: String)
 
     private external fun setSampling(temp: Float, topP: Float, repeat: Float)
-    override fun setSamplingParams(temp: Float, topP: Float, repeatPenalty: Float) = setSampling(temp, topP, repeatPenalty)
+
+    // Stored on the caller thread and pushed to native only on the llama thread inside loadModel(),
+    // after System.loadLibrary() has finished (1.0.0 crashed: UnsatisfiedLinkError race).
+    @Volatile private var pendingSampling = floatArrayOf(-1f, 0.9f, 1.1f)
+    override fun setSamplingParams(temp: Float, topP: Float, repeatPenalty: Float) {
+        pendingSampling = floatArrayOf(temp, topP, repeatPenalty)
+    }
+
+    private external fun resetContext()
+    private external fun hasChatTemplate(): Boolean
+
+    override suspend fun isChatModel(): Boolean = withContext(llamaDispatcher) { hasChatTemplate() }
+
+    override suspend fun resetConversation() = withContext(llamaDispatcher) {
+        check(_state.value is InferenceEngine.State.ModelReady) { "Cannot reset in ${_state.value.javaClass.simpleName}" }
+        resetContext()
+    }
+
+    private suspend fun awaitNativeReady() {
+        val s = state.first { it !is InferenceEngine.State.Uninitialized && it !is InferenceEngine.State.Initializing }
+        if (s is InferenceEngine.State.Error) throw s.exception
+    }
 
     @FastNative
     private external fun load(modelPath: String): Int
@@ -152,6 +174,7 @@ internal class InferenceEngineImpl private constructor(
      */
     override suspend fun loadModel(pathToModel: String) =
         withContext(llamaDispatcher) {
+            awaitNativeReady()
             check(_state.value is InferenceEngine.State.Initialized) {
                 "Cannot load model in ${_state.value.javaClass.simpleName}!"
             }
@@ -167,6 +190,7 @@ internal class InferenceEngineImpl private constructor(
                 Log.i(TAG, "Loading model... \n$pathToModel")
                 _readyForSystemPrompt = false
                 _state.value = InferenceEngine.State.LoadingModel
+                pendingSampling.let { setSampling(it[0], it[1], it[2]) }
                 load(pathToModel).let {
                     // TODO-han.yin: find a better way to pass other error codes
                     if (it != 0) throw UnsupportedArchitectureException()

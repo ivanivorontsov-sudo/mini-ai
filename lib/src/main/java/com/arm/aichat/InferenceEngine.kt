@@ -28,6 +28,12 @@ interface InferenceEngine {
     /** Sampling for the next loadModel(): temp<0 keeps default. */
     fun setSamplingParams(temp: Float, topP: Float, repeatPenalty: Float)
 
+    /** true if the GGUF carries a chat template (Qwen etc.); false for plain models like Ivan GPT. */
+    suspend fun isChatModel(): Boolean
+
+    /** Clears the KV cache and history so the next prompt starts from position 0. */
+    suspend fun resetConversation()
+
     /**
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */

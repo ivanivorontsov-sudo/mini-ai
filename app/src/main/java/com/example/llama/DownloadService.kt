@@ -54,22 +54,27 @@ class DownloadService : Service() {
     }
 
     private fun update(m: ModelInfo, done: Long) {
-        val pct = (done * 100 / m.size).toInt()
+        val pct = if (m.size > 0) (done * 100 / m.size).toInt() else 0
         getSystemService(NotificationManager::class.java)
             .notify(NID, notif(m.title, "$pct% · ${mb(done)} из ${mb(m.size)} МБ", pct, 100))
     }
 
     private fun run(m: ModelInfo) {
         val dir = modelsDir(this)
-        val part = File(dir, m.fileName + ".part")
+        val part = File(dir, m.fileName + if (m.zipped) ".zip.part" else ".part")
         val target = File(dir, m.fileName)
         try {
             var done = if (part.exists()) part.length() else 0L
             if (dir.usableSpace < m.size - done + 200L * 1024 * 1024)
                 throw Exception("Мало места: нужно ${mb(m.size - done)} МБ, свободно ${mb(dir.usableSpace)} МБ")
-            if (done < m.size) {
+            if (m.size <= 0 || done < m.size) {
                 val c = URL(m.url).openConnection() as HttpURLConnection
                 c.instanceFollowRedirects = true
+                if (m.githubAuth) {
+                    val tok = SecureStore.githubToken(this) ?: throw Exception("Нет GitHub-токена. Введите его в настройках.")
+                    c.setRequestProperty("Authorization", "Bearer $tok")
+                    c.setRequestProperty("Accept", "application/octet-stream")
+                }
                 c.connectTimeout = 20000; c.readTimeout = 60000
                 if (done > 0) c.setRequestProperty("Range", "bytes=$done-")
                 val code = c.responseCode
@@ -98,12 +103,27 @@ class DownloadService : Service() {
                 }
                 c.disconnect()
             }
-            if (part.length() != m.size) throw Exception("Файл неполный (${mb(part.length())} из ${mb(m.size)} МБ), нажмите «Скачать» ещё раз")
+            if (m.size > 0 && part.length() != m.size) throw Exception("Файл неполный (${mb(part.length())} из ${mb(m.size)} МБ), нажмите «Скачать» ещё раз")
             DlBus.state.value = DlState.Verifying(m)
             getSystemService(NotificationManager::class.java).notify(NID, notif(m.title, "Проверка SHA256…", 0, 0))
-            val sha = sha256(part)
-            if (!sha.equals(m.sha256, true)) { part.delete(); throw Exception("Контрольная сумма не совпала, файл удалён. Скачайте заново.") }
-            target.delete(); part.renameTo(target)
+            if (m.sha256.isNotEmpty()) {
+                val sha = sha256(part)
+                if (!sha.equals(m.sha256, true)) { part.delete(); throw Exception("Контрольная сумма не совпала, файл удалён. Скачайте заново.") }
+            }
+            val tmp = File(dir, m.fileName + ".tmp"); tmp.delete()
+            if (m.zipped) {
+                java.util.zip.ZipInputStream(FileInputStream(part)).use { z ->
+                    var e = z.nextEntry
+                    while (e != null && !e.name.lowercase().endsWith(".gguf")) e = z.nextEntry
+                    if (e == null) throw Exception("В архиве нет файла .gguf")
+                    tmp.outputStream().use { z.copyTo(it, 1 shl 20) }
+                }
+                part.delete()
+            } else part.renameTo(tmp)
+            val magic = tmp.inputStream().use { s -> ByteArray(4).also { s.read(it) } }
+            if (String(magic) != "GGUF") { tmp.delete(); throw Exception("Скачанный файл — не GGUF") }
+            target.delete(); tmp.renameTo(target)
+            if (m.id == IvanGpt.ID && m.version.isNotEmpty()) IvanGpt.setInstalledVersion(this, m.version)
             DlBus.state.value = DlState.Done(m)
         } catch (e: Exception) {
             DlBus.state.value = DlState.Failed(m, e.message ?: e.toString())
